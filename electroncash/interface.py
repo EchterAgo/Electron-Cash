@@ -31,14 +31,17 @@ import sys
 import threading
 import time
 import traceback
+import queue
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, NamedTuple, List, Iterable, Set
 from collections import namedtuple
+from enum import Enum
 
 from pathvalidate import sanitize_filename
 
 from .util import print_error
 from .utils import Event
+from . import networks
 
 ca_path = requests.certs.where()
 
@@ -50,7 +53,88 @@ from . import pem
 PING_INTERVAL = 300
 
 
-def Connection(server, queue, config_path, callback=None):
+class ServerProtocol(Enum):
+    TCP = 't'
+    SSL = 's'
+
+
+class Server(NamedTuple):
+    host: str
+    port: int
+    protocol: ServerProtocol
+
+    @classmethod
+    def build(cls, host: str, port: int, protocol: ServerProtocol):
+        assert isinstance(host, str)
+        assert isinstance(port, int)
+        assert isinstance(protocol, ServerProtocol)
+
+        return cls(host, port, protocol)
+
+    @classmethod
+    def deserialize(cls, server_str: str):
+        server_split = str(server_str).rsplit(':', 2)
+
+        assert len(server_split) > 0
+
+        host = server_split[0]
+        host = host.lower()  # DNS is case insensitive
+
+        if len(server_split) > 1:
+            port_str = server_split[1]
+        else:
+            port_str = networks.net.DEFAULT_PORTS['s']
+
+        port = int(port_str)  # Throw if cannot be converted to int
+
+        if len(server_split) > 2:
+            protocol = ServerProtocol(server_split[2])
+        else:
+            protocol = ServerProtocol.SSL
+
+        return cls.build(host, port, protocol)
+
+    @classmethod
+    def deserialize_list(cls, servers_list: List[str]) -> Iterable:
+        return [cls.deserialize(s) for s in servers_list]
+
+    @classmethod
+    def deserialize_set(cls, servers_list: List[str]) -> Set:
+        return set(cls.deserialize_list(servers_list))
+
+    @property
+    def use_ssl(self) -> bool:
+        return self.protocol == ServerProtocol.SSL
+
+    @property
+    def address_str(self) -> str:
+        return "{}:{}".format(self.host, self.port)
+
+    def serialize(self) -> str:
+        return str(':'.join([self.host, str(self.port), self.protocol.value]))
+
+    @classmethod
+    def serialize_list(cls, servers: Iterable) -> List[str]:
+        return [s.serialize() for s in servers]
+
+    def __str__(self) -> str:
+        return self.serialize()
+
+    def __eq__(self, o: object) -> bool:
+        if isinstance(o, Server):
+            return self.serialize() == o.serialize()
+        return False
+
+    def __hash__(self):
+        return hash((self.host, self.port, self.protocol))
+
+
+class SocketQueueEntry(NamedTuple):
+    server: Server
+    socket: socket.socket
+
+
+def Connection(server: Server, queue: queue.Queue[SocketQueueEntry], config_path, callback=None):
     """Makes asynchronous connections to a remote electrum server.
     Returns the running thread that is making the connection.
 
@@ -58,9 +142,6 @@ def Connection(server, queue, config_path, callback=None):
     queue of the form (server, socket), where socket is None if
     connection failed.
     """
-    host, port, protocol = server.rsplit(':', 2)
-    if not protocol in 'st':
-        raise Exception('Unknown protocol: %s' % protocol)
     c = TcpConnection(server, queue, config_path)
     if callback:
         callback(c)
@@ -71,19 +152,15 @@ def Connection(server, queue, config_path, callback=None):
 class TcpConnection(threading.Thread, util.PrintError):
     bad_certificate = Event()
 
-    def __init__(self, server, queue, config_path):
+    def __init__(self, server: Server, queue: queue.Queue[SocketQueueEntry], config_path):
         threading.Thread.__init__(self)
         self.config_path = config_path
         self.queue = queue
         self.server = server
-        self.host, self.port, self.protocol = self.server.rsplit(':', 2)
-        self.host = str(self.host)
-        self.port = int(self.port)
-        self.use_ssl = (self.protocol == 's')
         self.daemon = True
 
     def diagnostic_name(self):
-        return self.host
+        return self.server.host
 
     def check_host_name(self, peercert, name) -> bool:
         """Wrapper for ssl.match_hostname that never throws. Returns True if the
@@ -102,10 +179,10 @@ class TcpConnection(threading.Thread, util.PrintError):
 
     def get_simple_socket(self):
         try:
-            l = socket.getaddrinfo(self.host, self.port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            l = socket.getaddrinfo(self.server.host, self.server.port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         except OverflowError:
             # This can happen if user specifies a huge port out of 32-bit range. See #985
-            self.print_error("port invalid:", self.port)
+            self.print_error("port invalid:", self.server.port)
             return
         except socket.gaierror:
             self.print_error("cannot resolve hostname")
@@ -152,7 +229,7 @@ class TcpConnection(threading.Thread, util.PrintError):
                 context = self.get_ssl_context(cert_reqs=ssl.CERT_REQUIRED, ca_certs=ca_path)
                 s = context.wrap_socket(s, do_handshake_on_connect=True)
                 # validate cert
-                if s and self.check_host_name(s.getpeercert(), self.host):
+                if s and self.check_host_name(s.getpeercert(), self.server.host):
                     self.print_error("SSL certificate signed by CA")
                     # it's good, return the wrapped socket
                     return s, False
@@ -169,11 +246,11 @@ class TcpConnection(threading.Thread, util.PrintError):
         return None, True  # inform caller to abort the operation
 
     def get_socket(self):
-        if self.use_ssl:
+        if self.server.use_ssl:
             # Try with CA first, since they are preferred over self-signed certs
             # and are always accepted (even if a previous pinned self-signed
             # cert exists).
-            cert_path = os.path.join(self.config_path, 'certs', sanitize_filename(self.host, replacement_text='_'))
+            cert_path = os.path.join(self.config_path, 'certs', sanitize_filename(self.server.host, replacement_text='_'))
             has_pinned_self_signed = os.path.exists(cert_path)
             s, give_up = self._get_socket_and_verify_ca_cert(suppress_errors=has_pinned_self_signed)
             if s:
@@ -228,7 +305,7 @@ class TcpConnection(threading.Thread, util.PrintError):
         if s is None:
             return
 
-        if self.use_ssl:
+        if self.server.use_ssl:
             try:
                 context = self.get_ssl_context(cert_reqs=ssl.CERT_REQUIRED,
                                                ca_certs=(temporary_path if is_new else cert_path))
@@ -295,7 +372,7 @@ class TcpConnection(threading.Thread, util.PrintError):
 
         if socket:
             self.print_error("connected")
-        self.queue.put((self.server, socket))
+        self.queue.put(SocketQueueEntry(self.server, socket))
 
 
 class Interface(util.PrintError):
@@ -313,10 +390,9 @@ class Interface(util.PrintError):
     MODE_CATCH_UP = 'catch_up'
     MODE_VERIFICATION = 'verification'
 
-    def __init__(self, server, socket, *, max_message_bytes=0, config=None):
+    def __init__(self, server: Server, socket, *, max_message_bytes=0, config=None):
         self.server = server
         self.config = config
-        self.host, self.port, _ = server.rsplit(':', 2)
         self.socket = socket
 
         self.pipe = util.JSONSocketPipe(socket, max_message_bytes=max_message_bytes)
@@ -330,17 +406,14 @@ class Interface(util.PrintError):
         self.mode = None
 
     def __repr__(self):
-        return "<{}.{} {}>".format(__name__, type(self).__name__, self.format_address())
-
-    def format_address(self):
-        return "{}:{}".format(self.host, self.port)
+        return "<{}.{} {}>".format(__name__, type(self).__name__, self.server.address_str)
 
     def set_mode(self, mode):
         self.print_error("set_mode({})".format(mode))
         self.mode = mode
 
     def diagnostic_name(self):
-        return self.host
+        return self.server.host
 
     def fileno(self):
         # Needed for select

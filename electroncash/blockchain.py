@@ -31,6 +31,8 @@ from . import asert_daa
 from . import networks
 from . import util
 
+from .interface import Server
+
 from .bitcoin import *
 
 class VerifyError(Exception):
@@ -201,9 +203,11 @@ class Blockchain(util.PrintError):
     Manages blockchain headers and their verification
     """
 
+    catch_up: Server
+
     def __init__(self, config, base_height, parent_base_height):
         self.config = config
-        self.catch_up = None # interface catching up
+        self.catch_up = None  # interface catching up
         self.base_height = base_height
         self.parent_base_height = parent_base_height
 

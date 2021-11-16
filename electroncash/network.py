@@ -34,7 +34,7 @@ from collections import defaultdict
 import threading
 import socket
 import json
-from typing import Dict
+from typing import Dict, Set, NamedTuple, List, Iterable
 
 import socks
 from . import util
@@ -42,7 +42,7 @@ from . import bitcoin
 from .bitcoin import *
 from . import networks
 from .i18n import _
-from .interface import Connection, Interface
+from .interface import Connection, Interface, Server, ServerProtocol, SocketQueueEntry
 from . import blockchain
 from . import version
 from .tor import TorController, check_proxy_bypass_tor_control
@@ -52,6 +52,7 @@ DEFAULT_AUTO_CONNECT = True
 # Versions prior to 4.0.15 had this set to True, but we opted for False to
 # promote network health by allowing clients to connect to new servers easily.
 DEFAULT_WHITELIST_SERVERS_ONLY = False
+
 
 def parse_servers(result):
     """ parse servers list into dict format"""
@@ -91,50 +92,54 @@ def filter_version(servers):
     return {k: v for k, v in servers.items() if is_recent(v.get('version'))}
 
 
-def filter_protocol(hostmap, protocol = 's'):
+def filter_protocol(hostmap, protocol: Set[ServerProtocol] = [ServerProtocol.SSL]):
+    assert len(protocol) > 0
+
     '''Filters the hostmap for those implementing protocol.
     Protocol may be: 's', 't', or 'st' for both.
     The result is a list in serialized form.'''
     eligible = []
     for host, portmap in hostmap.items():
         for proto in protocol:
-            port = portmap.get(proto)
+            port = portmap.get(proto.value)
             if port:
-                eligible.append(serialize_server(host, port, proto))
+                eligible.append(Server.build(host, int(port), proto))
     return eligible
 
-def get_eligible_servers(hostmap=None, protocol="s", exclude_set=set()):
+
+def get_eligible_servers(hostmap=None, protocol: Set[ServerProtocol] = [ServerProtocol.SSL], exclude_set: Set[Server] = set()):
+    assert len(protocol) > 0
+
     if hostmap is None:
         hostmap = networks.net.DEFAULT_SERVERS
     return list(set(filter_protocol(hostmap, protocol)) - exclude_set)
 
-def pick_random_server(hostmap = None, protocol = 's', exclude_set = set()):
+
+def pick_random_server(hostmap=None, protocol: Set[ServerProtocol] = [ServerProtocol.SSL], exclude_set: Set[Server] = set()):
+    assert len(protocol) > 0
+
     eligible = get_eligible_servers(hostmap, protocol, exclude_set)
     return random.choice(eligible) if eligible else None
 
-def servers_to_hostmap(servers):
-    ''' Takes an iterable of HOST:PORT:PROTOCOL strings and breaks them into
+
+def servers_to_hostmap(servers: Iterable[Server]) -> Dict[str, Dict]:
+    ''' Takes an iterable of server objects and breaks them into
     a hostmap dict of host -> { protocol : port } suitable to be passed to
     pick_random_server() and get_eligible_servers() above.'''
     ret = dict()
-    for s in servers:
-        try:
-            host, port, protocol = deserialize_server(s)
-        except (AssertionError, ValueError, TypeError) as e:
-            util.print_error("[servers_to_hostmap] deserialization failure for server:", s, "error:", str(e))
-            continue # deserialization error
-        m = ret.get(host, dict())
+    for server in servers:
+        m = ret.get(server.host, dict())
         need_add = len(m) == 0
-        m[protocol] = port
+        m[server.protocol] = server.port
         if need_add:
             m['pruning'] = '-' # hmm. this info is missing, so give defaults just to make the map complete.
             m['version'] = version.PROTOCOL_VERSION
-            ret[host] = m
+            ret[server.host] = m
     return ret
 
 def hostmap_to_servers(hostmap):
     ''' The inverse of servers_to_hostmap '''
-    return filter_protocol(hostmap, protocol = 'st')
+    return filter_protocol(hostmap, protocol = [ServerProtocol.SSL, ServerProtocol.TCP])
 
 from .simple_config import SimpleConfig
 
@@ -180,17 +185,6 @@ def deserialize_proxy(s):
     return proxy
 
 
-def deserialize_server(server_str):
-    host, port, protocol = str(server_str).rsplit(':', 2)
-    assert protocol in 'st'
-    int(port)    # Throw if cannot be converted to int
-    return host, port, protocol
-
-
-def serialize_server(host, port, protocol):
-    return str(':'.join([host, port, protocol]))
-
-
 bypass_proxy_filters = [check_proxy_bypass_tor_control]
 
 
@@ -231,6 +225,17 @@ class Network(util.DaemonThread):
 
     tor_controller: TorController = None
 
+    socket_queue: queue.Queue[SocketQueueEntry] = queue.Queue()
+    blacklisted_servers: Set[Server]
+    whitelisted_servers: Set[Server]
+    disconnected_servers: Set[Server] = set()
+    connecting: Set[Server] = set()
+    bad_certificate_servers: Dict[Server, str] = dict()
+    recent_servers: List[Server] = []
+    interfaces: Dict[Server, Interface]
+    default_server: Server
+    protocol: ServerProtocol
+
     def __init__(self, config=None):
         if config is None:
             config = {}  # Do not use mutables as default values!
@@ -243,11 +248,10 @@ class Network(util.DaemonThread):
         if self.blockchain_index not in self.blockchains.keys():
             self.blockchain_index = 0
         # Server for addresses and transactions
-        self.blacklisted_servers = set(self.config.get('server_blacklist', []))
+        self.blacklisted_servers = Server.deserialize_set(self.config.get('server_blacklist', []))
         self.whitelisted_servers, self.whitelisted_servers_hostmap = self._compute_whitelist()
         self.print_error("server blacklist: {} server whitelist: {}".format(self.blacklisted_servers, self.whitelisted_servers))
         self.default_server = self.get_config_server()
-        self.bad_certificate_servers: Dict[str, str] = dict()
         self.server_list_updated = Event()
 
         self.tor_controller = TorController(self.config)
@@ -300,14 +304,12 @@ class Network(util.DaemonThread):
         self.interface = None                   # note: needs self.interface_lock
         self.interfaces = {}                    # note: needs self.interface_lock
         self.auto_connect = self.config.get('auto_connect', DEFAULT_AUTO_CONNECT)
-        self.connecting = set()
         self.requested_chunks = set()
-        self.socket_queue = queue.Queue()
         if Network.INSTANCE:
             # This happens on iOS which kills and restarts the daemon on app sleep/wake
             self.print_error("A new instance has started and is replacing the old one.")
         Network.INSTANCE = self # This implicitly should force stale instances to eventually del
-        self.start_network(deserialize_server(self.default_server)[2], deserialize_proxy(self.config.get('proxy')))
+        self.start_network(self.default_server.protocol, deserialize_proxy(self.config.get('proxy')))
 
     def on_tor_port_changed(self, controller: TorController):
         if not controller.active_socks_port or not controller.is_enabled() or not self.config.get('tor_use', False):
@@ -397,25 +399,24 @@ class Network(util.DaemonThread):
     def recent_servers_file(self):
         return os.path.join(self.config.path, "recent-servers")
 
-    def read_recent_servers(self):
+    def read_recent_servers(self) -> List[Server]:
         if not self.config.path:
             return []
         try:
             with open(self.recent_servers_file(), "r", encoding='utf-8') as f:
-                data = f.read()
-                return json.loads(data)
+                return list(Server.deserialize_list(json.load(f)))
         except:
+            self.print_exception("Failed to read recent servers")
             return []
 
     def save_recent_servers(self):
         if not self.config.path:
             return
-        s = json.dumps(self.recent_servers, indent=4, sort_keys=True)
         try:
             with open(self.recent_servers_file(), "w", encoding='utf-8') as f:
-                f.write(s)
+                json.dump(Server.serialize_list(self.recent_servers), f, indent=4, sort_keys=True)
         except:
-            pass
+            self.print_exception("Failed to save recent servers")
 
     def get_server_height(self):
         with self.interface_lock:
@@ -480,7 +481,7 @@ class Network(util.DaemonThread):
         # Now, if no interface, we will raise AssertionError
         assert isinstance(interface, Interface), "queue_request: No interface! (request={} params={})".format(method, params)
         if self.debug:
-            self.print_error(interface.host, "-->", method, params, message_id)
+            self.print_error(interface.server.host, "-->", method, params, message_id)
         interface.queue_request(method, params, message_id)
         if self is not Network.INSTANCE:
             self.print_error("*** WARNING: queueing request on a stale instance!")
@@ -561,17 +562,17 @@ class Network(util.DaemonThread):
             self.trigger_callback(key, self.get_status_value(key))
 
     def get_parameters(self):
-        host, port, protocol = deserialize_server(self.default_server)
-        return host, port, protocol, self.proxy, self.auto_connect
+        s = self.default_server
+        return s.host, s.port, s.protocol, self.proxy, self.auto_connect
 
     def get_donation_address(self):
         if self.is_connected():
             return self.donation_address
 
-    def get_interfaces(self, *, interfaces=False):
+    def get_interfaces(self, *, interfaces=False) -> List:
         """Returns the servers that are in connected state. Despite its name,
         this method does not return the actual interfaces unless interfaces=True,
-        but rather returns the server:50002:s style string. """
+        but rather returns the server:50002:s style object. """
         with self.interface_lock:
             return list(self.interfaces.values() if interfaces
                         else self.interfaces.keys())
@@ -581,30 +582,26 @@ class Network(util.DaemonThread):
         if self.irc_servers:
             out.update(filter_version(self.irc_servers.copy()))
         else:
-            for s in self.recent_servers:
-                try:
-                    host, port, protocol = deserialize_server(s)
-                except:
-                    continue
-                if host not in out:
-                    out[host] = { protocol:port }
+            for server in self.recent_servers:
+                if server.host not in out:
+                    out[server.host] = { server.protocol:server.port }
         return out
 
-    def start_interface(self, server_key):
+    def start_interface(self, server: Server):
         """Start the given server if it is not already active or being connected to.
 
         Arguments:
         server_key --- server specifier in the form of '<host>:<port>:<protocol>'
         """
-        if (not server_key in self.interfaces and not server_key in self.connecting):
-            if server_key == self.default_server:
-                self.print_error("connecting to %s as new interface" % server_key)
+        if (not server in self.interfaces and not server in self.connecting):
+            if server == self.default_server:
+                self.print_error("connecting to {} as new interface".format(server))
                 self.set_status('connecting')
-            self.connecting.add(server_key)
-            c = Connection(server_key, self.socket_queue, self.config.path,
+            self.connecting.add(server)
+            c = Connection(server, self.socket_queue, self.config.path,
                            lambda x: x.bad_certificate.append_weak(self.on_bad_certificate))
 
-    def get_unavailable_servers(self):
+    def get_unavailable_servers(self) -> Set[Server]:
         exclude_set = set(self.interfaces)
         exclude_set = exclude_set.union(self.connecting)
         exclude_set = exclude_set.union(self.disconnected_servers)
@@ -614,7 +611,7 @@ class Network(util.DaemonThread):
     def start_random_interface(self):
         exclude_set = self.get_unavailable_servers()
         hostmap = self.get_servers() if not self.is_whitelist_only() else self.whitelisted_servers_hostmap
-        server_key = pick_random_server(hostmap, self.protocol, exclude_set)
+        server_key = pick_random_server(hostmap, [self.protocol], exclude_set)
         if server_key:
             self.start_interface(server_key)
 
@@ -646,11 +643,11 @@ class Network(util.DaemonThread):
             socket.getaddrinfo = socket._getaddrinfo
         self.notify('proxy')
 
-    def start_network(self, protocol, proxy):
+    def start_network(self, protocol: ServerProtocol, proxy):
         assert not self.interface and not self.interfaces
         assert not self.connecting and self.socket_queue.empty()
         self.print_error('starting network')
-        self.disconnected_servers = set([])
+        self.disconnected_servers.clear()
         self.protocol = protocol
         self.set_proxy(proxy)
         self.start_interfaces()
@@ -664,11 +661,11 @@ class Network(util.DaemonThread):
                 self.close_interface(self.interface)
             assert self.interface is None
             assert not self.interfaces
-            self.connecting = set()
+            self.connecting.clear()
             # Get a new queue - no old pending connections thanks!
-            self.socket_queue = queue.Queue()
+            self.socket_queue.queue.clear()
 
-    def set_parameters(self, host, port, protocol, proxy, auto_connect):
+    def set_parameters(self, host: str, port: int, protocol: ServerProtocol, proxy, auto_connect):
         with self.interface_lock:
             try:
                 self.save_parameters(host, port, protocol, proxy, auto_connect)
@@ -676,12 +673,13 @@ class Network(util.DaemonThread):
                 return
             self.load_parameters()
 
-    def save_parameters(self, host, port, protocol, proxy, auto_connect):
+    def save_parameters(self, host: str, port: int, protocol: ServerProtocol, proxy, auto_connect):
         proxy_str = serialize_proxy(proxy)
-        server = serialize_server(host, port, protocol)
+        server = Server.build(host, port, protocol)
+        server_str = server.serialize()
         # sanitize parameters
         try:
-            deserialize_server(serialize_server(host, port, protocol))
+            Server.deserialize(server_str)
             if proxy:
                 proxy_modes.index(proxy["mode"]) + 1
                 int(proxy['port'])
@@ -690,33 +688,33 @@ class Network(util.DaemonThread):
 
         self.config.set_key('auto_connect', auto_connect, False)
         self.config.set_key("proxy", proxy_str, False)
-        self.config.set_key("server", server, True)
-        if self.config.get('server') != server or self.config.get('proxy') != proxy_str:
+        self.config.set_key("server", server_str, True)
+        cfg_server_str = Server.deserialize(self.config.get('server')).serialize()
+        if cfg_server_str != server_str or self.config.get('proxy') != proxy_str:
             raise ValueError("changes were not allowed by config")
 
     def load_parameters(self):
         server = self.get_config_server()
-        protocol = deserialize_server(server)[2]
         proxy = deserialize_proxy(self.config.get('proxy'))
         self.auto_connect = self.config.get('auto_connect', DEFAULT_AUTO_CONNECT)
-        if self.proxy != proxy or self.protocol != protocol:
+        if self.proxy != proxy or self.protocol != server.protocol:
             # Restart the network defaulting to the given server
             self.stop_network()
             self.default_server = server
-            self.start_network(protocol, proxy)
+            self.start_network(server.protocol, proxy)
         elif self.default_server != server:
             self.switch_to_interface(server, self.SWITCH_SET_PARAMETERS)
         else:
             self.switch_lagging_interface()
             self.notify('blockchain_updated')
 
-    def get_config_server(self):
+    def get_config_server(self) -> Server:
         server = self.config.get('server', None)
         if server:
             try:
-                deserialize_server(server)
+                server = Server.deserialize(server)
             except:
-                self.print_error('Warning: failed to parse server-string; falling back to random.')
+                self.print_exception('Warning: failed to parse server-string; falling back to random')
                 server = None
         wl_only = self.is_whitelist_only()
         if (not server) or (server in self.blacklisted_servers) or (wl_only and server not in self.whitelisted_servers):
@@ -749,7 +747,7 @@ class Network(util.DaemonThread):
     SWITCH_FOLLOW_CHAIN = 'SWITCH_FOLLOW_CHAIN'
     SWITCH_SET_PARAMETERS = 'SWITCH_SET_PARAMETERS'
 
-    def switch_to_interface(self, server, switch_reason=None):
+    def switch_to_interface(self, server: Server, switch_reason=None):
         """Switch to server as our interface.  If no connection exists nor
         being opened, start a thread to connect.  The actual switch will
         happen on receipt of the connection notification.  Do nothing
@@ -779,10 +777,11 @@ class Network(util.DaemonThread):
                     self.interface = None
                 interface.close()
 
-    def add_recent_server(self, server):
+    def add_recent_server(self, server: Server):
         # list is ordered
         if server in self.recent_servers:
             self.recent_servers.remove(server)
+
         self.recent_servers.insert(0, server)
         self.recent_servers = self.recent_servers[0:20]
         self.save_recent_servers()
@@ -1002,7 +1001,7 @@ class Network(util.DaemonThread):
             qname = getattr(callback, '__qualname__', repr(callback))
             self.print_error("Removed {} unanswered client requests and {} pending sends for callback: {}".format(ct, ct2, qname))
 
-    def connection_down(self, server, blacklist=False):
+    def connection_down(self, server: Server, blacklist=False):
         '''A connection to server either went down, or was never made.
         We distinguish by whether it is in self.interfaces.'''
         if blacklist:
@@ -1018,17 +1017,17 @@ class Network(util.DaemonThread):
             if b.catch_up == server:
                 b.catch_up = None
 
-    def new_interface(self, server_key, socket):
-        self.add_recent_server(server_key)
+    def new_interface(self, server: Server, socket):
+        self.add_recent_server(server)
 
-        interface = Interface(server_key, socket, max_message_bytes=self.MAX_MESSAGE_BYTES, config=self.config)
+        interface = Interface(server, socket, max_message_bytes=self.MAX_MESSAGE_BYTES, config=self.config)
         interface.blockchain = None
         interface.tip_header = None
         interface.tip = 0
         interface.set_mode(Interface.MODE_VERIFICATION)
 
         with self.interface_lock:
-            self.interfaces[server_key] = interface
+            self.interfaces[server] = interface
 
         # server.version should be the first message
         params = [version.PACKAGE_VERSION, version.PROTOCOL_VERSION]
@@ -1036,21 +1035,21 @@ class Network(util.DaemonThread):
         # The interface will immediately respond with it's last known header.
         self.queue_request('blockchain.headers.subscribe', [], interface)
 
-        if server_key == self.default_server:
-            self.switch_to_interface(server_key, self.SWITCH_DEFAULT)
+        if server == self.default_server:
+            self.switch_to_interface(server, self.SWITCH_DEFAULT)
 
     def maintain_sockets(self):
         '''Socket maintenance.'''
         # Responses to connection attempts?
         while not self.socket_queue.empty():
-            server, socket = self.socket_queue.get()
-            if server in self.connecting:
-                self.connecting.remove(server)
-            if socket:
-                self.remove_bad_certificate(server)
-                self.new_interface(server, socket)
+            qe = self.socket_queue.get()
+            if qe.server in self.connecting:
+                self.connecting.remove(qe.server)
+            if qe.socket:
+                self.remove_bad_certificate(qe.server)
+                self.new_interface(qe.server, qe.socket)
             else:
-                self.connection_down(server)
+                self.connection_down(qe.server)
 
         # Send pings and shut down stale interfaces
         # must use copy of values
@@ -1070,7 +1069,7 @@ class Network(util.DaemonThread):
                 self.start_random_interface()
                 if now - self.nodes_retry_time > self.NODES_RETRY_INTERVAL:
                     self.print_error('network: retrying connections')
-                    self.disconnected_servers = set([])
+                    self.disconnected_servers.clear()
                     self.nodes_retry_time = now
 
         # main interface
@@ -1960,19 +1959,19 @@ class Network(util.DaemonThread):
             return proxies
         return None
 
-    def on_bad_certificate(self, server, certificate):
+    def on_bad_certificate(self, server: Server, certificate):
         if server in self.bad_certificate_servers:
             return
         self.bad_certificate_servers[server] = certificate
         self.server_list_updated()
 
-    def remove_bad_certificate(self, server):
+    def remove_bad_certificate(self, server: Server):
         if server not in self.bad_certificate_servers:
             return
         del self.bad_certificate_servers[server]
         self.server_list_updated()
 
-    def remove_pinned_certificate(self, server):
+    def remove_pinned_certificate(self, server: Server):
         cert_file = self.bad_certificate_servers.get(server)
         if not cert_file:
             return False
@@ -1989,24 +1988,26 @@ class Network(util.DaemonThread):
         return True
 
 
-    def server_is_bad_certificate(self, server): return server in self.bad_certificate_servers
+    def server_is_bad_certificate(self, server: Server):
+        return server in self.bad_certificate_servers
 
-    def server_set_blacklisted(self, server, b, save=True, skip_connection_logic=False):
-        assert isinstance(server, str)
+    def server_set_blacklisted(self, server: Server, b, save=True, skip_connection_logic=False):
+        assert isinstance(server, Server)
         if b:
             self.blacklisted_servers |= {server}
         else:
             self.blacklisted_servers -= {server}
-        self.config.set_key("server_blacklist", list(self.blacklisted_servers), save)
+        self.config.set_key("server_blacklist", Server.serialize_list(self.blacklisted_servers), save)
         if b and not skip_connection_logic and server in self.interfaces:
             self.connection_down(server, False) # if blacklisting, this disconnects (if we were connected)
 
-    def server_is_blacklisted(self, server): return server in self.blacklisted_servers
+    def server_is_blacklisted(self, server: Server):
+        return server in self.blacklisted_servers
 
-    def server_set_whitelisted(self, server, b, save=True):
-        assert isinstance(server, str)
-        adds = set(self.config.get('server_whitelist_added', []))
-        rems = set(self.config.get('server_whitelist_removed', []))
+    def server_set_whitelisted(self, server: Server, b, save=True):
+        assert isinstance(server, Server)
+        adds = Server.deserialize_set(self.config.get('server_whitelist_added', []))
+        rems = Server.deserialize_set(self.config.get('server_whitelist_removed', []))
         is_hardcoded = server in self._hardcoded_whitelist
         s = {server} # make a set so |= and -= work
         len0 = len(self.whitelisted_servers)
@@ -2029,17 +2030,18 @@ class Network(util.DaemonThread):
         if len0 != len(self.whitelisted_servers):
             # it changed. So re-cache hostmap which we use as an argument to pick_random_server() elsewhere in this class
             self.whitelisted_servers_hostmap = servers_to_hostmap(self.whitelisted_servers)
-        self.config.set_key('server_whitelist_added', list(adds), save)
-        self.config.set_key('server_whitelist_removed', list(rems), save)
+        self.config.set_key('server_whitelist_added', Server.serialize_list(adds), save)
+        self.config.set_key('server_whitelist_removed', Server.serialize_list(rems), save)
 
-    def server_is_whitelisted(self, server): return server in self.whitelisted_servers
+    def server_is_whitelisted(self, server: Server):
+        return server in self.whitelisted_servers
 
     def _compute_whitelist(self):
         if not hasattr(self, '_hardcoded_whitelist'):
             self._hardcoded_whitelist = frozenset(hostmap_to_servers(networks.net.DEFAULT_SERVERS))
         ret = set(self._hardcoded_whitelist)
-        ret |= set(self.config.get('server_whitelist_added', [])) # this key is all the servers that weren't in the hardcoded whitelist that the user explicitly added
-        ret -= set(self.config.get('server_whitelist_removed', [])) # this key is all the servers that were hardcoded in the whitelist that the user explicitly removed
+        ret |= Server.deserialize_set(self.config.get('server_whitelist_added', [])) # this key is all the servers that weren't in the hardcoded whitelist that the user explicitly added
+        ret -= Server.deserialize_set(self.config.get('server_whitelist_removed', [])) # this key is all the servers that were hardcoded in the whitelist that the user explicitly removed
         return ret, servers_to_hostmap(ret)
 
     def is_whitelist_only(self):

@@ -37,8 +37,8 @@ import PyQt5.QtCore as QtCore
 
 from electroncash import networks
 from electroncash.i18n import _, pgettext
-from electroncash.interface import Interface
-from electroncash.network import serialize_server, deserialize_server, get_eligible_servers
+from electroncash.interface import Interface, Server, ServerProtocol
+from electroncash.network import get_eligible_servers
 from electroncash.plugins import run_hook
 from electroncash.tor import TorController
 from electroncash.util import print_error, Weak, PrintError, in_main_thread
@@ -46,7 +46,6 @@ from electroncash.util import print_error, Weak, PrintError, in_main_thread
 from .util import *
 from .utils import UserPortValidator
 
-protocol_names = ['TCP', 'SSL']
 protocol_letters = 'ts'
 
 class NetworkDialog(MessageBoxMixin, QDialog):
@@ -194,10 +193,10 @@ class NodesListWidget(QTreeWidget):
             for i in items:
                 star = ' ◀' if i == network.interface else ''
 
-                display_text = i.host
-                is_onion = i.host.lower().endswith('.onion')
-                if is_onion and i.host in servers and 'display' in servers[i.host]:
-                    display_text = servers[i.host]['display'] + ' (.onion)'
+                display_text = i.server.host
+                is_onion = i.server.host.lower().endswith('.onion')
+                if is_onion and i.server.host in servers and 'display' in servers[i.host]:
+                    display_text = servers[i.server.host]['display'] + ' (.onion)'
 
                 item = QTreeWidgetItem([display_text + star, '', '%d'%i.tip])
                 item.setData(0, Qt.UserRole, 0)
@@ -262,7 +261,7 @@ class ServerListWidget(QTreeWidget):
         if self.parent.can_set_server(server):
             useAction = menu.addAction(_("Use as server"), lambda: self.set_server(server))
         else:
-            useAction = menu.addAction(server.split(':',1)[0], lambda: None)
+            useAction = menu.addAction(server.host, lambda: None)
             useAction.setDisabled(True)
         menu.addSeparator()
         flagval = item.data(0, Qt.UserRole)
@@ -287,15 +286,14 @@ class ServerListWidget(QTreeWidget):
             menu.addAction(optxt, partial(self.on_remove_pinned_certificate, server))
         menu.exec_(self.viewport().mapToGlobal(position))
 
-    def on_remove_pinned_certificate(self, server):
+    def on_remove_pinned_certificate(self, server: Server):
         if not self.parent.remove_pinned_certificate(server):
             QMessageBox.critical(None, _("Remove pinned certificate"),
                                  _("Failed to remove the pinned certificate. Check the log for errors."))
 
-    def set_server(self, s):
-        host, port, protocol = deserialize_server(s)
-        self.parent.server_host.setText(host)
-        self.parent.server_port.setText(port)
+    def set_server(self, s: Server):
+        self.parent.server_host.setText(s.host)
+        self.parent.server_port.setText(str(s.port))
         self.parent.autoconnect_cb.setChecked(False) # force auto-connect off if they did "Use as server"
         self.parent.set_server()
         self.parent.update()
@@ -321,7 +319,7 @@ class ServerListWidget(QTreeWidget):
             brush = item.foreground(i); color = brush.color(); color.setHsvF(color.hueF(), color.saturationF(), 0.5); brush.setColor(color)
             item.setForeground(i, brush)
 
-    def update(self, network, servers, protocol, use_tor):
+    def update(self, network, servers, protocol: ServerProtocol, use_tor):
         sel_item = self.currentItem()
         sel = sel_item.data(2, Qt.UserRole) if sel_item else None
         restore_sel = None
@@ -332,9 +330,9 @@ class ServerListWidget(QTreeWidget):
             is_onion = _host.lower().endswith('.onion')
             if is_onion and not use_tor:
                 continue
-            port = d.get(protocol)
+            port = d.get(protocol.value)
             if port:
-                server = serialize_server(_host, port, protocol)
+                server = Server.build(_host, int(port), protocol)
 
                 flag = ""
                 flagval = 0
@@ -770,8 +768,8 @@ class NetworkChoiceLayout(QObject, PrintError):
         preferred_only = self.network.is_whitelist_only()
         if not self.server_host.hasFocus() and not self.server_port.hasFocus():
             self.server_host.setText(host)
-            self.server_port.setText(port)
-        self.ssl_cb.setChecked(protocol=='s')
+            self.server_port.setText(str(port))
+        self.ssl_cb.setChecked(protocol==ServerProtocol.SSL)
         ssl_disable = self.ssl_cb.isChecked() and not self.tor_cb.isChecked() and not host.lower().endswith('.onion')
         for w in [self.ssl_cb]:#, self.ssl_help]:
             w.setDisabled(ssl_disable)
@@ -780,7 +778,7 @@ class NetworkChoiceLayout(QObject, PrintError):
 
         self.servers = self.network.get_servers()
 
-        host = self.network.interface.host if self.network.interface else pgettext('Referencing server', 'None')
+        host = self.network.interface.server.host if self.network.interface else pgettext('Referencing server', 'None')
         is_onion = host.lower().endswith('.onion')
         if is_onion and host in self.servers and 'display' in self.servers[host]:
             host = self.servers[host]['display'] + ' (.onion)'
@@ -788,9 +786,9 @@ class NetworkChoiceLayout(QObject, PrintError):
 
         self.set_protocol(protocol)
         def protocol_suffix():
-            if protocol == 't':
+            if protocol == ServerProtocol.TCP:
                 return '  (non-SSL)'
-            elif protocol == 's':
+            elif protocol == ServerProtocol.SSL:
                 return '  [SSL]'
             return ''
         server_list_txt = (_('Server peers') if self.network.is_connected() else _('Servers')) + " ({})".format(len(self.servers))
@@ -800,7 +798,7 @@ class NetworkChoiceLayout(QObject, PrintError):
             bl_srv_ct_str = ' ({}) <a href="ViewBanList">{}</a>'.format(len(self.network.blacklisted_servers), _("View ban list..."))
         else:
             bl_srv_ct_str = " (0)<i> </i>" # ensure rich text
-        servers_whitelisted = set(get_eligible_servers(self.servers, protocol)).intersection(self.network.whitelisted_servers) - self.network.blacklisted_servers
+        servers_whitelisted = set(get_eligible_servers(self.servers, [protocol])).intersection(self.network.whitelisted_servers) - self.network.blacklisted_servers
         self.legend_label.setText(ServerFlag.Symbol[ServerFlag.Preferred] + "=" + _("Preferred") + " ({})".format(len(servers_whitelisted)) + "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
                                   + ServerFlag.Symbol[ServerFlag.Banned] + "=" + _("Banned") + bl_srv_ct_str)
         self.servers_list.update(self.network, self.servers, self.protocol, self.tor_cb.isChecked())
@@ -857,17 +855,17 @@ class NetworkChoiceLayout(QObject, PrintError):
     def layout(self):
         return self.layout_
 
-    def set_protocol(self, protocol):
+    def set_protocol(self, protocol: ServerProtocol):
         if protocol != self.protocol:
             self.protocol = protocol
 
     def change_protocol(self, use_ssl):
-        p = 's' if use_ssl else 't'
+        p = ServerProtocol.SSL if use_ssl else ServerProtocol.TCP
         host = self.server_host.text()
         pp = self.servers.get(host, networks.net.DEFAULT_PORTS)
-        if p not in pp.keys():
+        if p.value not in pp.keys():
             p = list(pp.keys())[0]
-        port = pp[p]
+        port = pp[p.value]
         self.server_host.setText(host)
         self.server_port.setText(port)
         self.set_protocol(p)
@@ -877,11 +875,10 @@ class NetworkChoiceLayout(QObject, PrintError):
         self.network.follow_chain(index)
         self.update()
 
-    def follow_server(self, server):
+    def follow_server(self, server: Server):
         self.network.switch_to_interface(server)
-        host, port, protocol, proxy, auto_connect = self.network.get_parameters()
-        host, port, protocol = deserialize_server(server)
-        self.network.set_parameters(host, port, protocol, proxy, auto_connect)
+        _, _, _, proxy, auto_connect = self.network.get_parameters()
+        self.network.set_parameters(server.host, server.port, server.protocol, proxy, auto_connect)
         self.update()
 
     def server_changed(self, x):
@@ -905,7 +902,7 @@ class NetworkChoiceLayout(QObject, PrintError):
                 port = pp.get(protocol)
         self.server_host.setText(host)
         self.server_port.setText(port)
-        self.ssl_cb.setChecked(protocol=='s')
+        self.ssl_cb.setChecked(protocol==ServerProtocol.SSL)
 
     def accept(self):
         pass
@@ -913,13 +910,13 @@ class NetworkChoiceLayout(QObject, PrintError):
     def set_server(self, onion_hack=False):
         host, port, protocol, proxy, auto_connect = self.network.get_parameters()
         host = str(self.server_host.text())
-        port = str(self.server_port.text())
-        protocol = 's' if self.ssl_cb.isChecked() else 't'
+        port = int(self.server_port.text())
+        protocol = ServerProtocol.SSL if self.ssl_cb.isChecked() else ServerProtocol.TCP
         if onion_hack:
             # Fix #1174 -- bring back from the dead non-SSL support for .onion only in a safe way
             if host.lower().endswith('.onion'):
                 self.print_error("Onion/TCP hack: detected .onion, forcing TCP (non-SSL) mode")
-                protocol = 't'
+                protocol = ServerProtocol.TCP
                 self.ssl_cb.setChecked(False)
         auto_connect = self.autoconnect_cb.isChecked()
         self.network.set_parameters(host, port, protocol, proxy, auto_connect)
@@ -998,15 +995,15 @@ class NetworkChoiceLayout(QObject, PrintError):
     def proxy_settings_changed(self):
         self.tor_cb.setChecked(False)
 
-    def remove_pinned_certificate(self, server):
+    def remove_pinned_certificate(self, server: Server):
         return self.network.remove_pinned_certificate(server)
 
-    def set_blacklisted(self, server, bl):
+    def set_blacklisted(self, server: Server, bl):
         self.network.server_set_blacklisted(server, bl, True)
         self.set_server() # if the blacklisted server is the active server, this will force a reconnect to another server
         self.update()
 
-    def set_whitelisted(self, server, flag):
+    def set_whitelisted(self, server: Server, flag):
         self.network.server_set_whitelisted(server, flag, True)
         self.set_server()
         self.update()
@@ -1030,8 +1027,7 @@ class NetworkChoiceLayout(QObject, PrintError):
         tree = QTreeWidget()
         tree.setHeaderLabels([_('Host'), _('Port')])
         for s in bl:
-            host, port, protocol = deserialize_server(s)
-            item = QTreeWidgetItem([host, str(port)])
+            item = QTreeWidgetItem([s.host, str(s.port)])
             item.setFlags(Qt.ItemIsEnabled)
             tree.addTopLevelItem(item)
         tree.setIndentation(3)
