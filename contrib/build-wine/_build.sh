@@ -34,12 +34,12 @@ rm "$here"/dist/* -fr
 rm -fr /tmp/electrum-build
 mkdir -p /tmp/electrum-build
 
-(
-    cd "$PROJECT_ROOT"
-    for pkg in secp zbar openssl libevent zlib tor ; do
-        "$here"/../make_$pkg || fail "Could not build $pkg"
-    done
-)
+#(
+#    cd "$PROJECT_ROOT"
+#    for pkg in secp zbar openssl libevent zlib tor ; do
+#        "$here"/../make_$pkg || fail "Could not build $pkg"
+#    done
+#)
 
 prepare_wine() {
     info "Preparing Wine..."
