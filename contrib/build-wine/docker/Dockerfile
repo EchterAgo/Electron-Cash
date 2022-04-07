@@ -45,10 +45,10 @@ RUN echo deb ${UBUNTU_MIRROR} bionic main restricted universe multiverse > /etc/
         mingw-w64=5.0.3-1 \
         mingw-w64-tools=5.0.3-1 \
         win-iconv-mingw-w64-dev=0.0.8-2 \
-        wine-stable-amd64:amd64=6.0.0~bionic-1 \
-        wine-stable-i386:i386=6.0.0~bionic-1 \
-        wine-stable:amd64=6.0.0~bionic-1 \
-        winehq-stable:amd64=6.0.0~bionic-1 && \
+        wine-stable-amd64:amd64=7.0.0.0~bionic-1 \
+        wine-stable-i386:i386=7.0.0.0~bionic-1 \
+        wine-stable:amd64=7.0.0.0~bionic-1 \
+        winehq-stable:amd64=7.0.0.0~bionic-1 && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get autoremove -y && \
     apt-get clean
