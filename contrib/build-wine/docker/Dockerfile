@@ -45,6 +45,7 @@ RUN echo deb ${UBUNTU_MIRROR} bionic main restricted universe multiverse > /etc/
         mingw-w64=5.0.3-1 \
         mingw-w64-tools=5.0.3-1 \
         win-iconv-mingw-w64-dev=0.0.8-2 \
+        cabextract=1.6-1.1 \
         wine-stable-amd64:amd64=7.0.0.0~bionic-1 \
         wine-stable-i386:i386=7.0.0.0~bionic-1 \
         wine-stable:amd64=7.0.0.0~bionic-1 \
