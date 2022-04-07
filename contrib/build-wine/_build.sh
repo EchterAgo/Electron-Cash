@@ -61,7 +61,7 @@ prepare_wine() {
         ## These settings probably don't need change
         export WINEPREFIX=$HOME/wine64
         export WINEARCH='win32'
-        export WINEDEBUG=-all
+        #export WINEDEBUG=-all
 
         PYHOME=c:/python$PYTHON_VERSION  # NB: PYTON_VERSION comes from ../base.sh
         PYTHON="wine $PYHOME/python.exe -OO -B"
