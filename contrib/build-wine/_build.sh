@@ -34,12 +34,12 @@ rm "$here"/dist/* -fr
 rm -fr /tmp/electrum-build
 mkdir -p /tmp/electrum-build
 
-(
-    cd "$PROJECT_ROOT"
-    for pkg in secp zbar openssl libevent zlib tor ; do
-        "$here"/../make_$pkg || fail "Could not build $pkg"
-    done
-)
+# (
+#     cd "$PROJECT_ROOT"
+#     for pkg in secp zbar openssl libevent zlib tor ; do
+#         "$here"/../make_$pkg || fail "Could not build $pkg"
+#     done
+# )
 
 prepare_wine() {
     info "Preparing Wine..."
@@ -114,6 +114,8 @@ EOF
             info "Installing $msifile..."
             wine msiexec /i "${msifile}.msi" /qn TARGETDIR=$PYHOME || fail "Failed to install Python component: ${msifile}"
         done
+
+        $PYTHON -m pip install cytoolz || fail bla
 
         # The below requirement files use hashed packages that we
         # need for pyinstaller and other parts of the build.  Using a hashed
