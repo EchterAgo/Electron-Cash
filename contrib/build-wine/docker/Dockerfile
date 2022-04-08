@@ -114,6 +114,12 @@ RUN wget https://aka.ms/vs/16/release/installer -O vs_installer.opc && \
         --quiet && \
     wineserver -w
 
+RUN mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
+    mv opc/Contents/vswhere.exe "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
+    rm -rf opc
+
+ENV WINEDEBUG=-all
+
 #RUN wget -O buildtools.exe http://download.microsoft.com/download/5/F/7/5F7ACAEB-8363-451F-9425-68A90F98B238/visualcppbuildtools_full.exe && \
 #    wine buildtools.exe /quiet && \
 #    wineserver -w
