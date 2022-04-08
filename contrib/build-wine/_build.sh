@@ -34,12 +34,12 @@ rm "$here"/dist/* -fr
 rm -fr /tmp/electrum-build
 mkdir -p /tmp/electrum-build
 
-#(
-#    cd "$PROJECT_ROOT"
-#    for pkg in secp zbar openssl libevent zlib tor ; do
-#        "$here"/../make_$pkg || fail "Could not build $pkg"
-#    done
-#)
+(
+    cd "$PROJECT_ROOT"
+    for pkg in secp zbar openssl libevent zlib tor ; do
+        "$here"/../make_$pkg || fail "Could not build $pkg"
+    done
+)
 
 prepare_wine() {
     info "Preparing Wine..."
@@ -60,8 +60,8 @@ prepare_wine() {
 
         ## These settings probably don't need change
         export WINEPREFIX=$HOME/wine64
-        export WINEARCH='win32'
-        #export WINEDEBUG=-all
+        #export WINEARCH='win32'
+        export WINEDEBUG=-all
 
         PYHOME=c:/python$PYTHON_VERSION  # NB: PYTON_VERSION comes from ../base.sh
         PYTHON="wine $PYHOME/python.exe -OO -B"
@@ -72,11 +72,6 @@ prepare_wine() {
         #echo "done"
 
         wine 'wineboot'
-
-        wget -O /tmp/winetricks https://raw.githubusercontent.com/Winetricks/winetricks/094a4d8552587fca12a101b6a1104833dad4043f/src/winetricks
-        chmod +x /tmp/winetricks
-        echo "662738eb3863282b7438bedba0c17c5e1b47f1d4b0f8a929ff7ac48a3ace13b2 /tmp/winetricks" | sha256sum -c -
-        /tmp/winetricks -q vstools2019
 
         info "Cleaning tmp"
         rm -rf $HOME/tmp
