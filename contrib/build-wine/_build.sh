@@ -115,8 +115,6 @@ EOF
             wine msiexec /i "${msifile}.msi" /qn TARGETDIR=$PYHOME || fail "Failed to install Python component: ${msifile}"
         done
 
-        $PYTHON -m pip install cytoolz || fail bla
-
         # The below requirement files use hashed packages that we
         # need for pyinstaller and other parts of the build.  Using a hashed
         # requirements file hardens the build against dependency attacks.
@@ -124,6 +122,8 @@ EOF
         $PYTHON -m pip install --no-deps --no-warn-script-location -r $here/../deterministic-build/requirements-pip.txt || fail "Failed to install pip"
         info "Installing build requirements from requirements-build-wine.txt ..."
         $PYTHON -m pip install --no-deps --no-warn-script-location -r $here/../deterministic-build/requirements-build-wine.txt || fail "Failed to install build requirements"
+
+        $PYTHON -m pip install cytoolz || fail bla
 
         info "Compiling PyInstaller bootloader with AntiVirus False-Positive Protection™ ..."
         mkdir pyinstaller
