@@ -59,9 +59,9 @@ prepare_wine() {
         PYINSTALLER_COMMIT=d6f3d02365ba68ffc84169c56c292701f346110e # Version 4.2 + a patch to drop an unused .rc file
 
         ## These settings probably don't need change
-        export WINEPREFIX=$HOME/wine64
+        #export WINEPREFIX=$HOME/wine64
         #export WINEARCH='win32'
-        export WINEDEBUG=-all
+        #export WINEDEBUG=-all
 
         PYHOME=c:/python$PYTHON_VERSION  # NB: PYTON_VERSION comes from ../base.sh
         PYTHON="wine $PYHOME/python.exe -OO -B"
