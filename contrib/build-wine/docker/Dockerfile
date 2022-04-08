@@ -94,6 +94,7 @@ RUN wget https://aka.ms/vs/16/release/installer -O vs_installer.opc && \
         --productId Microsoft.VisualStudio.Product.BuildTools \
         --add "Microsoft.VisualStudio.Workload.VCTools" \
         --add "Microsoft.VisualStudio.Component.Windows10SDK.17763" \
+        --add "Microsoft.Component.VC.Runtime.UCRTSDK" \
         --includeRecommended \
         --quiet && \
     mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
