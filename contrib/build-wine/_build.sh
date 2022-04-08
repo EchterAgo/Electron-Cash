@@ -206,8 +206,8 @@ build_the_app() {
 
         NAME_ROOT=$PACKAGE  # PACKAGE comes from ../base.sh
         # These settings probably don't need any change
-        export WINEPREFIX=$HOME/wine64
-        export WINEDEBUG=-all
+        #export WINEPREFIX=$HOME/wine64
+        #export WINEDEBUG=-all
         export PYTHONDONTWRITEBYTECODE=1
 
         PYHOME=c:/python$PYTHON_VERSION
