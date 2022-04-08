@@ -83,23 +83,6 @@ RUN wineboot && \
 RUN /tmp/winetricks --optout -q corefonts && \
     wineserver -w
 
-ENV WINEDEBUG=
-
-#ENV WINEDEBUG=all,-relay,-heap,-font
-#ENV WINEDEBUG=all
-
-#ENV DISPLAY=localhost:11.0
-
-#RUN wine notepad
-
-# RUN cp /etc/xrdp/xrdp.ini /tmp/xrdp.ini && \
-#     sed -i -e 's/LogFile=xrdp.log/LogFile=\/tmp\/xrdp.log/g' /tmp/xrdp.ini && \
-#     cat /tmp/xrdp.ini | grep LogFile
-
-RUN find ${WINEPREFIX}
-
-#ENV WINEDEBUG=all
-
 # This is needed because we don't have dbus in the container and the dbus client libraries are set to abort by default
 ENV DBUS_FATAL_WARNINGS=0
 
@@ -110,31 +93,10 @@ RUN wget https://aka.ms/vs/16/release/installer -O vs_installer.opc && \
         --channelUri "https://aka.ms/vs/16/release/channel" \
         --productId Microsoft.VisualStudio.Product.BuildTools \
         --add "Microsoft.VisualStudio.Workload.VCTools" \
+        --add "Microsoft.VisualStudio.Component.Windows10SDK.17763" \
         --includeRecommended \
         --quiet && \
-    wineserver -w
-
-RUN mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
+    mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
     mv opc/Contents/vswhere.exe "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
-    rm -rf opc
-
-ENV WINEDEBUG=-all
-
-#RUN wget -O buildtools.exe http://download.microsoft.com/download/5/F/7/5F7ACAEB-8363-451F-9425-68A90F98B238/visualcppbuildtools_full.exe && \
-#    wine buildtools.exe /quiet && \
-#    wineserver -w
-
-#ENV WINEDEBUG=+all,-relay,-heap
-
-# USER 0:0
-
-# RUN apt-get install -qy \
-#         xvfb
-
-# RUN sed -i -e 's/e653e715ddb8a08873e50a2fe091fca2ce77726b8b6ed2b99ed916d0e03c1fbe/3f3938428c645139a8151803ca62719569eea619ef2f4a8a12f7b64503df6c81/g' /tmp/winetricks
-
-# USER ${USER_ID}:${GROUP_ID}
-
-# RUN /tmp/winetricks --optout -q 7zip && \
-#     xvfb-run /tmp/winetricks --optout -q vstools2019 && \
-#     wineserver -w
+    rm -rf opc && \
+    wineserver -w
