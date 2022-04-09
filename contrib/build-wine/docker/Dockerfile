@@ -110,5 +110,6 @@ RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
 
 # Patch to make vcvarsall.bat work
 # "C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86 && set
+# python -c "from setuptools import msvc; print(msvc.msvc14_get_vc_env('x86'))"
 # Caused by wrong delayed expansion in Wine, see https://bugs.winehq.org/show_bug.cgi?id=38289
 RUN sed -i -e 's/!result:~0,3!/10./g' "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/2019/BuildTools/Common7/Tools/vsdevcmd/core/winsdk.bat"
