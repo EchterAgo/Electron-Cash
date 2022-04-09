@@ -92,9 +92,9 @@ RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
     7z x -oopc /tmp/vs_installer.opc && rm /tmp/vs_installer.opc && \
     # DBUS_FATAL_WARNINGS=0 is needed because we don't have dbus in the container and the dbus client libraries are set to abort by default
     DBUS_FATAL_WARNINGS=0 xvfb-run wine opc/Contents/vs_installer.exe install --quiet \
-        --channelId VisualStudio.16.Release \
-        --channelUri "https://aka.ms/vs/16/release/channel" \
+        --channelId VisualStudio.16.Release --channelUri "https://aka.ms/vs/16/release/channel" \
         --productId Microsoft.VisualStudio.Product.BuildTools \
+        --nocache --installWhileDownloading \
         --add "Microsoft.VisualStudio.Workload.VCTools" \
         # Test
         --add "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" \
@@ -113,3 +113,6 @@ RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
 # "C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86 && set
 # Caused by wrong delayed expansion in Wine, see https://bugs.winehq.org/show_bug.cgi?id=38289
 RUN sed -i -e 's/!result:~0,3!/10./g' "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/2019/BuildTools/Common7/Tools/vsdevcmd/core/winsdk.bat"
+
+RUN BLA=bla && \
+    echo ${BLA}
