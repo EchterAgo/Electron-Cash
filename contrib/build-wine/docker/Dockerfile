@@ -101,3 +101,10 @@ RUN wget https://aka.ms/vs/16/release/installer -O vs_installer.opc && \
     mv opc/Contents/vswhere.exe "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
     rm -rf opc && \
     wineserver -w
+
+RUN rm vs_installer.opc
+
+# Patch to make vcvarsall.bat work
+# "C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86 && set
+# Caused by wrong delayed expansion in Wine, see https://bugs.winehq.org/show_bug.cgi?id=38289
+RUN sed -i -e 's/!result:~0,3!/10./g' "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/2019/BuildTools/Common7/Tools/vsdevcmd/core/winsdk.bat"
