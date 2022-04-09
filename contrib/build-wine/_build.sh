@@ -59,10 +59,6 @@ prepare_wine() {
         PYINSTALLER_COMMIT=d6f3d02365ba68ffc84169c56c292701f346110e # Version 4.2 + a patch to drop an unused .rc file
 
         ## These settings probably don't need change
-        #export WINEPREFIX=$HOME/wine64
-        #export WINEARCH='win32'
-        #export WINEDEBUG=-all
-
         PYHOME=c:/python$PYTHON_VERSION  # NB: PYTON_VERSION comes from ../base.sh
         PYTHON="wine $PYHOME/python.exe -OO -B"
 
@@ -122,6 +118,8 @@ EOF
         $PYTHON -m pip install --no-deps --no-warn-script-location -r $here/../deterministic-build/requirements-pip.txt || fail "Failed to install pip"
         info "Installing build requirements from requirements-build-wine.txt ..."
         $PYTHON -m pip install --no-deps --no-warn-script-location -r $here/../deterministic-build/requirements-build-wine.txt || fail "Failed to install build requirements"
+
+        $PYTHON -c "from setuptools import msvc; msvc.msvc14_get_vc_env('x86')"
 
         $PYTHON -m pip install cytoolz || fail bla
 
@@ -208,8 +206,6 @@ build_the_app() {
 
         NAME_ROOT=$PACKAGE  # PACKAGE comes from ../base.sh
         # These settings probably don't need any change
-        #export WINEPREFIX=$HOME/wine64
-        #export WINEDEBUG=-all
         export PYTHONDONTWRITEBYTECODE=1
 
         PYHOME=c:/python$PYTHON_VERSION
@@ -247,7 +243,7 @@ build_the_app() {
 
         info "Resetting modification time in C:\Python..."
         # (Because we just installed a bunch of stuff)
-        pushd $HOME/wine64/drive_c/python$PYTHON_VERSION
+        pushd $WINEPREFIX/drive_c/python$PYTHON_VERSION
         find -exec touch -d '2000-11-11T11:11:11+00:00' {} +
         ls -l
         popd
