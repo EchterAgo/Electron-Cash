@@ -119,7 +119,7 @@ EOF
         info "Installing build requirements from requirements-build-wine.txt ..."
         $PYTHON -m pip install --no-deps --no-warn-script-location -r $here/../deterministic-build/requirements-build-wine.txt || fail "Failed to install build requirements"
 
-        $PYTHON -c "from setuptools import msvc; msvc.msvc14_get_vc_env('x86')"
+        $PYTHON -c "from setuptools import msvc; print(msvc.msvc14_get_vc_env('x86'))"
 
         $PYTHON -m pip install cytoolz || fail bla
 
