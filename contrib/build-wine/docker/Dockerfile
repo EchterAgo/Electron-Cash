@@ -79,31 +79,29 @@ USER ${USER_ID}:${GROUP_ID}
 
 WORKDIR ${HOME}
 
+# wineboot needs to run after the user is added to /etc/passwd, otherwise it will assume the username is "wine"
 RUN wineboot && \
     /tmp/winetricks --optout -q dotnet472 && \
+    # Wait for the wine server to shutdown, needs to be done after wineboot to ensure the installation is good
     wineserver -w
 
-# RUN /tmp/winetricks --optout -q corefonts && \
-#     wineserver -w
+# DBUS_FATAL_WARNINGS=0 is needed because we don't have dbus in the container and Wine calls
+# dbus_connection_send_with_reply_and_block with a NULL connection. The dbus client libraries are set to abort by
+# default unless this variable is set.
+ENV DBUS_FATAL_WARNINGS=0
 
 RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
     # As of 2022-04-08 the checksum has changed and is not the same as in winetricks anymore
     echo "3f3938428c645139a8151803ca62719569eea619ef2f4a8a12f7b64503df6c81 /tmp/vs_installer.opc" | sha256sum -c - && \
     7z x -oopc /tmp/vs_installer.opc && rm /tmp/vs_installer.opc && \
-    # DBUS_FATAL_WARNINGS=0 is needed because we don't have dbus in the container and the dbus client libraries are set to abort by default
-    DBUS_FATAL_WARNINGS=0 xvfb-run wine opc/Contents/vs_installer.exe install --quiet \
+    xvfb-run wine opc/Contents/vs_installer.exe install --quiet \
         --channelId VisualStudio.16.Release --channelUri "https://aka.ms/vs/16/release/channel" \
         --productId Microsoft.VisualStudio.Product.BuildTools \
         --nocache --installWhileDownloading \
         --add "Microsoft.VisualStudio.Workload.VCTools" \
-        # Test
+        # We could use --includeRecommended like winetricks does but to save time and space we only include what we actually need
         --add "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" \
-        --add "Microsoft.VisualStudio.Component.Windows10SDK.19041" \
-        # Before
-        #--add "Microsoft.VisualStudio.Component.Windows10SDK.17763" \
-        #--add "Microsoft.Component.VC.Runtime.UCRTSDK" \
-        #--includeRecommended \
-        && \
+        --add "Microsoft.VisualStudio.Component.Windows10SDK.19041" && \
     # vswhere.exe needs to be installed in this path so setuptools can detect the VS installation
     mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
     mv opc/Contents/vswhere.exe "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
@@ -113,6 +111,3 @@ RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
 # "C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86 && set
 # Caused by wrong delayed expansion in Wine, see https://bugs.winehq.org/show_bug.cgi?id=38289
 RUN sed -i -e 's/!result:~0,3!/10./g' "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/2019/BuildTools/Common7/Tools/vsdevcmd/core/winsdk.bat"
-
-RUN BLA=bla && \
-    echo ${BLA}
