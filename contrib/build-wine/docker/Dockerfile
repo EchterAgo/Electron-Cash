@@ -48,8 +48,11 @@ RUN echo "78b185fabdb323971d13bd329fefc8038e08559aa51c4996de18db0639a51df6 /tmp/
         wine-${WINEDIST}-i386:i386=${WINEVERSION} \
         wine-${WINEDIST}:amd64=${WINEVERSION} \
         winehq-${WINEDIST}:amd64=${WINEVERSION} \
+        # cabextract is needed for winetricks to install the .NET framework
         cabextract=1.9-3 \
+        # xvfb is needed to launch the Visual Studio installer
         xvfb=2:1.20.13-1ubuntu1.1 \
+        # winbind is needed for the Visual Studio installer and cl.exe PDB generation
         winbind=2:4.13.17~dfsg-0ubuntu0.21.10.1
 
 RUN rm -rf /var/lib/apt/lists/* && \
@@ -80,29 +83,31 @@ RUN wineboot && \
     /tmp/winetricks --optout -q dotnet472 && \
     wineserver -w
 
-RUN /tmp/winetricks --optout -q corefonts && \
-    wineserver -w
+# RUN /tmp/winetricks --optout -q corefonts && \
+#     wineserver -w
 
-# This is needed because we don't have dbus in the container and the dbus client libraries are set to abort by default
-ENV DBUS_FATAL_WARNINGS=0
-
-RUN wget https://aka.ms/vs/16/release/installer -O vs_installer.opc && \
-    7z x -oopc vs_installer.opc && \
-    xvfb-run wine opc/Contents/vs_installer.exe install \
+RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
+    # As of 2022-04-08 the checksum has changed and is not the same as in winetricks anymore
+    echo "3f3938428c645139a8151803ca62719569eea619ef2f4a8a12f7b64503df6c81 /tmp/vs_installer.opc" | sha256sum -c - && \
+    7z x -oopc vs_installer.opc && rm vs_installer.opc && \
+    # DBUS_FATAL_WARNINGS=0 is needed because we don't have dbus in the container and the dbus client libraries are set to abort by default
+    DBUS_FATAL_WARNINGS=0 xvfb-run wine opc/Contents/vs_installer.exe install --quiet \
         --channelId VisualStudio.16.Release \
         --channelUri "https://aka.ms/vs/16/release/channel" \
         --productId Microsoft.VisualStudio.Product.BuildTools \
         --add "Microsoft.VisualStudio.Workload.VCTools" \
-        --add "Microsoft.VisualStudio.Component.Windows10SDK.17763" \
-        --add "Microsoft.Component.VC.Runtime.UCRTSDK" \
-        --includeRecommended \
-        --quiet && \
+        # Test
+        --add "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" \
+        --add "Microsoft.VisualStudio.Component.Windows10SDK.19041" \
+        # Before
+        #--add "Microsoft.VisualStudio.Component.Windows10SDK.17763" \
+        #--add "Microsoft.Component.VC.Runtime.UCRTSDK" \
+        #--includeRecommended \
+        && \
+    # vswhere.exe needs to be installed in this path so setuptools can detect the VS installation
     mkdir "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
     mv opc/Contents/vswhere.exe "${WINEPREFIX}"/"drive_c/Program Files/Microsoft Visual Studio/Installer" && \
-    rm -rf opc && \
-    wineserver -w
-
-RUN rm vs_installer.opc
+    rm -rf opc && wineserver -w
 
 # Patch to make vcvarsall.bat work
 # "C:\Program Files\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x86 && set
