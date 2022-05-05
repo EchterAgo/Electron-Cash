@@ -53,7 +53,9 @@ RUN echo "78b185fabdb323971d13bd329fefc8038e08559aa51c4996de18db0639a51df6 /tmp/
         # xvfb is needed to launch the Visual Studio installer
         xvfb=2:1.20.13-1ubuntu1.1 \
         # winbind is needed for the Visual Studio installer and cl.exe PDB generation
-        winbind=2:4.13.17~dfsg-0ubuntu0.21.10.1
+        winbind=2:4.13.17~dfsg-0ubuntu0.21.10.1 \
+        # osslsigncode is needed to verify PE executable signatures
+        osslsigncode=2.1-1
 
 RUN rm -rf /var/lib/apt/lists/* && \
     apt-get autoremove -y && \
@@ -62,6 +64,14 @@ RUN rm -rf /var/lib/apt/lists/* && \
 RUN wget -q -O /tmp/winetricks https://raw.githubusercontent.com/Winetricks/winetricks/9c97d44b9b68a1b09e244e46f9ae0831ab35c315/src/winetricks && \
     chmod +x /tmp/winetricks && \
     echo "311c8c223bb83a7558b9e51197a9ccf7182bbd63849c64827b87bbc5f627f5cb /tmp/winetricks" | sha256sum -c -
+
+RUN wget -q -U "Mozarella/4.0" -O /tmp/MicRooCerAut_2010-06-23.crt http://www.microsoft.com/pki/certs/MicRooCerAut_2010-06-23.crt && \
+    echo "df545bf919a2439c36983b54cdfc903dfa4f37d3996d8d84b4c31eec6f3c163e /tmp/MicRooCerAut_2010-06-23.crt" | sha256sum -c - && \
+    openssl x509 -in /tmp/MicRooCerAut_2010-06-23.crt -inform DER -out /tmp/MicRooCerAut_2010-06-23.pem -outform PEM && \
+    wget -q -U "Mozarella/4.0" -O /tmp/MicRooCerAut2011_2011_03_22.crt http://www.microsoft.com/pki/certs/MicRooCerAut2011_2011_03_22.crt && \
+    echo "847df6a78497943f27fc72eb93f9a637320a02b561d0a91b09e87a7807ed7c61 /tmp/MicRooCerAut2011_2011_03_22.crt" | sha256sum -c - && \
+    openssl x509 -in /tmp/MicRooCerAut2011_2011_03_22.crt -inform DER -out /tmp/MicRooCerAut2011_2011_03_22.pem -outform PEM && \
+    rm /tmp/MicRooCerAut*.crt
 
 ARG USER_ID
 ARG GROUP_ID
@@ -95,6 +105,8 @@ RUN wget https://aka.ms/vs/16/release/installer -O /tmp/vs_installer.opc && \
     # As of 2022-04-08 the checksum has changed and is not the same as in winetricks anymore
     echo "ac9c4fbe7b2f777c6e46cb69d26d878f9119e3c32172d679bf70c0f003f4c790 /tmp/vs_installer.opc" | sha256sum -c - && \
     7z x -oopc /tmp/vs_installer.opc && rm /tmp/vs_installer.opc && \
+    osslsigncode verify -in opc/Contents/vs_installer.exe -CAfile /tmp/MicRooCerAut_2010-06-23.pem -untrusted /tmp/MicRooCerAut_2010-06-23.pem && \
+    osslsigncode verify -in opc/Contents/vswhere.exe -CAfile /tmp/MicRooCerAut2011_2011_03_22.pem -untrusted /tmp/MicRooCerAut_2010-06-23.pem && \
     xvfb-run wine opc/Contents/vs_installer.exe install --quiet \
         --channelId VisualStudio.16.Release --channelUri "https://aka.ms/vs/16/release/channel" \
         --productId Microsoft.VisualStudio.Product.BuildTools \
