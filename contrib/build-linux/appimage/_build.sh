@@ -114,15 +114,26 @@ info "Preparing electrum-locale"
 
 info "Installing Electron Cash and its dependencies"
 mkdir -p "$CACHEDIR/pip_cache"
-# Note: We must specify -g0 for CFLAGS to ensure no debug symbols (which can be non-deterministic due to tmp paths
-# encoded in the debug symbols).
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --no-binary :all: --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-pip.txt"
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --no-binary :all: --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements.txt"
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --no-binary :all: --only-binary pyqt5 --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-binaries.txt"
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --no-binary :all: --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-hw.txt"
+function run_pip {
+    # Note: We must specify -g0 for CFLAGS to ensure no debug symbols (which can be non-deterministic due to tmp paths
+    # encoded in the debug symbols).
+    CFLAGS="-g0" "$python" -m pip "$@"
+}
+function run_pip_install {
+    [[ "${BUILD_DEBUG:-0}" -ne 0 ]] && pip_verbose="yes" || pip_verbose=""
+    run_pip install ${pip_verbose:+"-vvv"} --no-deps --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" "$@"
+}
+run_pip_install --no-binary :all: -r "$CONTRIB/deterministic-build/requirements-pip.txt"
+# To speed up the build we need to enable the locally built wheel cache which is not used by default when no-binary is used.
+# Command line feature flags are not correctly passed to pip subprocesses so we need to set this in the configuration file.
+# This can be removed when pip 23.1 is released, which will enable the feature by default.
+run_pip config set global.use-feature no-binary-enable-wheel-cache
+run_pip_install --no-binary :all: --only-binary cmake -r "$CONTRIB/deterministic-build/requirements.txt"
+run_pip_install --no-binary :all: --only-binary pyqt5 -r "$CONTRIB/deterministic-build/requirements-binaries.txt"
+run_pip_install --no-binary :all: -r "$CONTRIB/deterministic-build/requirements-hw.txt"
 # Note: Too many of these web3 packages fail to build if using --no-binary, so disabled for web3
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" -r "$CONTRIB/deterministic-build/requirements-web3.txt"
-CFLAGS="-g0" "$python" -m pip install --no-deps --no-warn-script-location --cache-dir "$CACHEDIR/pip_cache" "$PROJECT_ROOT"
+run_pip_install -r "$CONTRIB/deterministic-build/requirements-web3.txt"
+run_pip_install "$PROJECT_ROOT"
 "$python" -m pip uninstall -y -r "$CONTRIB/requirements/requirements-build-uninstall.txt"
 
 
