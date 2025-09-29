@@ -182,24 +182,6 @@ strip_binaries()
 }
 strip_binaries
 
-# Strip protbuf binaries of filepaths in .rodata section
-info "Patching protobuf binaries for reproducibility"
-find "$PYDIR"/site-packages/google -name "*.so" -type f | while read -r file; do
-    # Create a backup
-    cp "$file" "$file.bak"
-
-    # Replace temp paths with deterministic paths of EXACTLY the same length
-    # The pattern /tmp/pip-install-XXXXXXXX/protobuf_YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY/
-    # needs to be replaced with a fixed string of the same length
-    perl -pi -e 's|/tmp/pip-install-[a-z0-9_]{8}/protobuf_[a-f0-9]{32}|/tmp/build-fixed-00000000/protobuf_00000000000000000000000000000000|g' "$file"
-
-    # Verify the file size hasn't changed
-    if [ "$(stat -c%s "$file")" != "$(stat -c%s "$file.bak")" ]; then
-        fail "Binary patching changed file size - this is dangerous!"
-    fi
-    rm "$file.bak"
-done
-
 remove_emptydirs()
 {
   find "$APPDIR" -type d -empty -print0 | xargs -0 --no-run-if-empty rmdir -vp --ignore-fail-on-non-empty
