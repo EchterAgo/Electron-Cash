@@ -61,6 +61,9 @@ $SUDO docker build --progress plain -t electroncash-appimage-builder-img-$DOCKER
 FRESH_CLONE=`pwd`/contrib/build-linux/fresh_clone
 FRESH_CLONE_DIR=$FRESH_CLONE/$GIT_DIR_NAME
 
+CACHE_DIR="$HOME"/.cache/electron-cash-build
+mkdir -p "$CACHE_DIR" || true
+
 (
     $SUDO rm -fr $FRESH_CLONE && \
         mkdir -p $FRESH_CLONE && \
@@ -81,6 +84,7 @@ mkdir "$FRESH_CLONE_DIR/contrib/build-linux/home" || fail "Failed to create home
     -e BUILD_DEBUG="$BUILD_DEBUG" \
     --name electroncash-appimage-builder-cont-$DOCKER_SUFFIX \
     -v $FRESH_CLONE_DIR:/opt/electroncash:delegated \
+    -v "$CACHE_DIR":/opt/electroncash/contrib/build-linux/appimage/.cache/appimage:delegated \
     --rm \
     --workdir /opt/electroncash/contrib/build-linux/appimage \
     -u $(id -u $USER):$(id -g $USER) \
